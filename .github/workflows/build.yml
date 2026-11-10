@@ -432,13 +432,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add build.md state.md *-update.json *-changelog.md
+          git add build.md state.md 2>/dev/null || :
+          git add *-update.json *-changelog.md 2>/dev/null || :
       
           if ! git diff --cached --quiet; then
             git commit -m "Bump version ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}"
-            git reset --hard HEAD
             for attempt in 1 2 3; do
-              git pull --rebase origin update && git push origin HEAD:update && break || sleep 2
+              git push origin HEAD:update && break || (git pull --rebase origin update && sleep 2)
             done
           else
             echo "no changes!"
