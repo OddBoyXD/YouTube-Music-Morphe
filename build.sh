@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+shopt -s nullglob
+
+source utils.sh
+
+export MAIN_PID=$$
+trap "abort 'Aborted by signal'" INT TERM
+
+if [ "${1-}" = "clean" ]; then
+	rm -r "$TEMP_DIR" "$BUILD_DIR" build.md
+	exit 0
+fi
+
+jq --version >/dev/null || abort "\`jq\` is not installed. install it with 'apt install jq' or equivalent"
+java --version >/dev/null || abort "\`java\` is not installed. install it with 'apt install openjdk-21-jre' or equivalent"
+zip --version >/dev/null || abort "\`zip\` is not installed. install it with 'apt install zip' or equivalent"
+
+set_prebuilts
+
+vtf() { if ! isoneof "${1}" "true" "false"; then abort "ERROR: '${1}' is not a valid option for '${2}': only true or false is allowed"; fi; }
+
+# -- Main config --
+toml_prep "${1:-config.toml}" || abort "could not find config file '${1:-config.toml}'\n\tUsage: $0 <config.toml>"
+main_config_t=$(toml_get_table_main)
+COMPRESSION_LEVEL=$(toml_get "$main_config_t" compression-level) || COMPRESSION_LEVEL="9"
+if ! PARALLEL_JOBS=$(toml_get "$main_config_t" parallel-jobs); then
+	if [ "$OS" = Android ]; then PARALLEL_JOBS=1; else PARALLEL_JOBS=$(nproc); fi
+fi
+PARALLEL_JOBS=1 # TODO: multiple jobs were broken by recent cli versions. and i cant bother to fix it so instead, i disable it.
+REMOVE_RV_INTEGRATIONS_CHECKS=$(toml_get "$main_config_t" remove-rv-integrations-checks) || REMOVE_RV_INTEGRATIONS_CHECKS="true"
+DEF_PATCHES_VER=$(toml_get "$main_config_t" patches-version) || DEF_PATCHES_VER="latest"
+DEF_CLI_VER=$(toml_get "$main_config_t" cli-version) || DEF_CLI_VER="latest"
+DEF_PATCHES_SRC=$(toml_get "$main_config_t" patches-source) || DEF_PATCHES_SRC="MorpheApp/morphe-patches"
+DEF_CLI_SRC=$(toml_get "$main_config_t" cli-source) || DEF_CLI_SRC="MorpheApp/morphe-desktop"
+DEF_RV_BRAND=$(toml_get "$main_config_t" rv-brand) || DEF_RV_BRAND="Morphe"
+mkdir -p "$TEMP_DIR" "$BUILD_DIR" "$STOCK_CACHE_DIR"
+
+if [ "${2-}" = "--config-update" ]; then
+	config_update
+	exit 0
+fi
+
+: >build.md
+# STOCK_CACHE_DIR/.manifest is NOT truncated here - it's a persistent,
+# per-table upserted record (see build_rv()) that round-trips through the
+# same CI cache as the apks themselves, so a table config_update() decided
+# not to touch this run doesn't look "unwanted" and get its still-current
+# apk pruned.
+ENABLE_MODULE_UPDATE=$(toml_get "$main_config_t" enable-module-update) || ENABLE_MODULE_UPDATE=true
+if [ "$ENABLE_MODULE_UPDATE" = true ] && [ -z "${GITHUB_REPOSITORY-}" ]; then
+	pr "You are building locally. Module updates will not be enabled."
+	ENABLE_MODULE_UPDATE=false
+fi
+if ((COMPRESSION_LEVEL > 9)) || ((COMPRESSION_LEVEL < 0)); then abort "compression-level must be within 0-9"; fi
+
+rm -rf module/bin/*/tmp.*
+rm -f "$TEMP_DIR/cli.md" "$TEMP_DIR/patches.md" "$TEMP_DIR/failed" "$TEMP_DIR/skipped"
+for file in "$TEMP_DIR"/*/changelog.md; do
+	[ -f "$file" ] && : >"$file"
+done
+: >"$TEMP_DIR/failed"
+
+mkdir -p ${MODULE_TEMPLATE_DIR}/bin/arm64 ${MODULE_TEMPLATE_DIR}/bin/arm ${MODULE_TEMPLATE_DIR}/bin/x86 ${MODULE_TEMPLATE_DIR}/bin/x64
+gh_dl "${MODULE_TEMPLATE_DIR}/bin/arm64/cmpr" "https://github.com/j-hc/cmpr/releases/latest/download/cmpr-arm64-v8a"
+gh_dl "${MODULE_TEMPLATE_DIR}/bin/arm/cmpr" "https://github.com/j-hc/cmpr/releases/latest/download/cmpr-armeabi-v7a"
+gh_dl "${MODULE_TEMPLATE_DIR}/bin/x86/cmpr" "https://github.com/j-hc/cmpr/releases/latest/download/cmpr-x86"
+gh_dl "${MODULE_TEMPLATE_DIR}/bin/x64/cmpr" "https://github.com/j-hc/cmpr/releases/latest/download/cmpr-x86_64"
+
+idx=0
+for table_name in $(toml_get_table_names); do
+	if [ -z "$table_name" ]; then continue; fi
+	tt=$(toml_get_table "$table_name")
+	enabled=$(toml_get "$tt" enabled) || enabled=true
+	vtf "$enabled" "enabled"
+	if [ "$enabled" = false ]; then continue; fi
+	if [ -n "${ONLY_TABLES:-}" ] && ! isoneof "$table_name" ${ONLY_TABLES//,/ }; then continue; fi
+	if ((idx >= PARALLEL_JOBS)); then
+		wait -n
+		idx=$((idx - 1))
+	fi
+
+	declare -A app_args=()
+	patches_src=$(toml_get "$tt" patches-source) || patches_src=$DEF_PATCHES_SRC
+	patches_ver=$(toml_get "$tt" patches-version) || patches_ver=$DEF_PATCHES_VER
+	cli_src=$(toml_get "$tt" cli-source) || cli_src=$DEF_CLI_SRC
+	cli_ver=$(toml_get "$tt" cli-version) || cli_ver=$DEF_CLI_VER
+
+	if ! PREBUILTS="$(get_prebuilts "$cli_src" "$cli_ver" "$patches_src" "$patches_ver")"; then
+		abort "Could not get prebuilts for '$table_name'"
+	fi
+	read -r patches_jar cli_jar <<<"$PREBUILTS"
+	app_args[cli]=$cli_jar
+	app_args[ptjar]=$patches_jar
+	app_args[rv_brand]=$(toml_get "$tt" rv-brand) || app_args[rv_brand]=$DEF_RV_BRAND
+
+	app_args[excluded_patches]=$(toml_get "$tt" excluded-patches) || app_args[excluded_patches]=""
+	if [ -n "${app_args[excluded_patches]}" ] && [[ ${app_args[excluded_patches]} != *'"'* ]]; then abort "patch names inside excluded-patches must be quoted"; fi
+	app_args[included_patches]=$(toml_get "$tt" included-patches) || app_args[included_patches]=""
+	if [ -n "${app_args[included_patches]}" ] && [[ ${app_args[included_patches]} != *'"'* ]]; then abort "patch names inside included-patches must be quoted"; fi
+	app_args[exclusive_patches]=$(toml_get "$tt" exclusive-patches) && vtf "${app_args[exclusive_patches]}" "exclusive-patches" || app_args[exclusive_patches]=false
+	app_args[version]=$(toml_get "$tt" version) || app_args[version]="auto"
+	app_args[app_name]=$(toml_get "$tt" app-name) || app_args[app_name]=$table_name
+	app_args[patcher_args]=$(toml_get "$tt" patcher-args) || app_args[patcher_args]=""
+
+	app_args[addon_patches]=$(toml_get "$tt" addon-patches) || app_args[addon_patches]=""
+	addon_patches_source=$(toml_get "$tt" addon-patches-source) || addon_patches_source=""
+	for addon_src in $addon_patches_source; do
+		if addon_file=$(get_addon "$addon_src"); then
+			app_args[addon_patches]+=" $addon_file"
+		else
+			epr "Could not get addon '${addon_src}' for '${table_name}', skipping it"
+		fi
+	done
+	app_args[table]=$table_name
+	app_args[build_mode]=$(toml_get "$tt" build-mode) && {
+		if ! isoneof "${app_args[build_mode]}" both apk module; then
+			abort "ERROR: build-mode '${app_args[build_mode]}' is not a valid option for '${table_name}': only 'both', 'apk' or 'module' is allowed"
+		fi
+	} || app_args[build_mode]=apk
+	app_args[include_stock]=$(toml_get "$tt" include-stock) && {
+		if ! isoneof "${app_args[include_stock]}" disable merged split; then
+			abort "ERROR: include-stock '${app_args[include_stock]}' is not a valid option for '${table_name}': only 'disable', 'merged' or 'split' is allowed"
+		fi
+	} || app_args[include_stock]=merged
+
+	for dl_from in "${DL_SRCS[@]}"; do
+		if app_args[${dl_from}_dlurl]=$(toml_get "$tt" "${dl_from}-dlurl"); then
+			app_args[${dl_from}_dlurl]=${app_args[${dl_from}_dlurl]%/}
+			app_args[${dl_from}_dlurl]=${app_args[${dl_from}_dlurl]%download}
+			app_args[${dl_from}_dlurl]=${app_args[${dl_from}_dlurl]%/}
+			app_args[dl_from]=${dl_from}
+		else
+			app_args[${dl_from}_dlurl]=""
+		fi
+	done
+	if [ -z "${app_args[dl_from]-}" ]; then abort "ERROR: no 'dlurl' option was set for '$table_name'. (${DL_SRCS[*]})"; fi
+	app_args[arch]=$(toml_get "$tt" arch) || app_args[arch]="all"
+	if ! isoneof "${app_args[arch]}" "both" "all" "arm64-v8a" "arm-v7a" "x86_64" "x86"; then
+		abort "wrong arch '${app_args[arch]}' for '$table_name'"
+	fi
+
+	app_args[pkg_name]=$(toml_get "$tt" pkg-name) || app_args[pkg_name]=""
+	app_args[dpi]=$(toml_get "$tt" dpi) || app_args[dpi]=""
+	table_name_f=${table_name,,}
+	table_name_f=${table_name_f// /-}
+	app_args[module_prop_name]=$(toml_get "$tt" module-prop-name) || app_args[module_prop_name]="${table_name_f}-jhc"
+
+	if [ "${app_args[arch]}" = both ]; then
+		app_args[table]="$table_name (arm64-v8a)"
+		app_args[arch]="arm64-v8a"
+		module_prop_name_b=${app_args[module_prop_name]}
+		app_args[module_prop_name]="${module_prop_name_b}-arm64"
+		idx=$((idx + 1))
+		build_rv "$(declare -p app_args)" &
+		app_args[table]="$table_name (arm-v7a)"
+		app_args[arch]="arm-v7a"
+		app_args[module_prop_name]="${module_prop_name_b}-arm"
+		if ((idx >= PARALLEL_JOBS)); then
+			wait -n
+			idx=$((idx - 1))
+		fi
+		idx=$((idx + 1))
+		build_rv "$(declare -p app_args)" &
+	else
+		if [ "${app_args[arch]}" = "arm64-v8a" ]; then
+			app_args[module_prop_name]="${app_args[module_prop_name]}-arm64"
+		elif [ "${app_args[arch]}" = "arm-v7a" ]; then
+			app_args[module_prop_name]="${app_args[module_prop_name]}-arm"
+		fi
+		idx=$((idx + 1))
+		build_rv "$(declare -p app_args)" &
+	fi
+done
+wait
+_clean_tmp
+
+FAILED=$(sort -u "$TEMP_DIR/failed" 2>/dev/null || :)
+if [ -n "$FAILED" ]; then
+	abort "Build failed for: $(echo "$FAILED" | tr '\n' ' ')"
+fi
+if [ -z "$(ls -A1 "${BUILD_DIR}")" ]; then abort "No files were built."; fi
+
+log "\nInstall instructions: [NonRoot](https://github.com/${GITHUB_REPOSITORY:-MANCrimSon/YouTube-ReVanced-Extended}#nonroot) · [Root](https://github.com/${GITHUB_REPOSITORY:-MANCrimSon/YouTube-ReVanced-Extended}#root)\n"
+if [ -s "$TEMP_DIR/cli.md" ]; then
+	log "$(cat "$TEMP_DIR/cli.md")\n"
+fi
+if [ -s "$TEMP_DIR/patches.md" ]; then
+	log "$(cat "$TEMP_DIR/patches.md")"
+fi
+
+SKIPPED=$(cat "$TEMP_DIR"/skipped 2>/dev/null || :)
+if [ -n "$SKIPPED" ]; then
+	log "\nSkipped:"
+	log "$SKIPPED"
+fi
+
+pr "Done"
