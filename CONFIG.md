@@ -79,7 +79,7 @@ Each section `[App-Name]` configures a specific application target:
 
 > [!NOTE]
 > **In-App Update Checker Addon (`update-check.mpp`):**  
-> All NonRoot builds automatically include the built-in update checker addon. Currently, this addon queries releases and changelogs exclusively from the main repository (`MANCrimSon/YouTube-ReVanced-Extended`). If building in a custom fork, the in-app update checker will continue checking `MANCrimSon/YouTube-ReVanced-Extended` unless modified in the addon source code (`src/app/morphe/extension/jhc/JhcUpdateCheckPatch.java`).
+> All NonRoot builds automatically include the built-in update checker addon. This addon queries releases and changelogs directly from this repository (`OddBoyXD/YouTube-Music-Morphe`).
 
 ---
 

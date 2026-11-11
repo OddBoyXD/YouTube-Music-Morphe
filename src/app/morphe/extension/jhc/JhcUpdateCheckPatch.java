@@ -76,8 +76,8 @@ import java.security.Provider;
 import java.security.Security;
 
 public class JhcUpdateCheckPatch {
-    private static final String TAG = "MANCrimSon_update";
-    private static final String PREFS_NAME = "mancrimson_update_prefs";
+    private static final String TAG = "OddVerse_update";
+    private static final String PREFS_NAME = "oddverse_update_prefs";
     private static final String KEY_SNOOZE_UNTIL = "snooze_until";
     private static final String KEY_SNOOZED_TAG = "snoozed_tag";
     private static final String KEY_SKIPPED_TAG = "skipped_tag";
@@ -153,9 +153,8 @@ public class JhcUpdateCheckPatch {
     private static final long STARTUP_DELAY_MS = 10000L;
     // 24 hours cooldown between automatic background checks
     private static final long API_COOLDOWN_MS = 86_400_000L;
-    // Current latest release in MANCrimSon/YouTube-ReVanced-Extended is 411.
-    // In CI build, NEXT_VER_CODE will dynamically overwrite this with the next tag (e.g. 412).
-    private static final int EMBEDDED_BUILD_CODE = 411;
+    // In CI build, NEXT_VER_CODE will dynamically overwrite this with the next tag.
+    private static final int EMBEDDED_BUILD_CODE = 1;
     // FALSE: dialog only appears if new update is available (and cooldown/snooze respected)
     private static final boolean FORCE_TEST_ALWAYS_SHOW = false;
 
@@ -1038,7 +1037,7 @@ public class JhcUpdateCheckPatch {
                     HttpURLConnection conn = openCleanConnection(REPO_RELEASES_API);
                     conn.setRequestMethod("GET");
                     conn.setRequestProperty("Accept", "application/vnd.github+json");
-                    conn.setRequestProperty("User-Agent", "MANCrimSon-Update-Checker");
+                    conn.setRequestProperty("User-Agent", "OddVerse-Update-Checker");
                     conn.setConnectTimeout(NETWORK_TIMEOUT_MS);
                     conn.setReadTimeout(NETWORK_TIMEOUT_MS);
 

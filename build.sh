@@ -182,7 +182,7 @@ if [ -n "$FAILED" ]; then
 fi
 if [ -z "$(ls -A1 "${BUILD_DIR}")" ]; then abort "No files were built."; fi
 
-log "\nInstall instructions: [NonRoot](https://github.com/${GITHUB_REPOSITORY:-MANCrimSon/YouTube-ReVanced-Extended}#nonroot) · [Root](https://github.com/${GITHUB_REPOSITORY:-MANCrimSon/YouTube-ReVanced-Extended}#root)\n"
+log "\nInstall instructions: [NonRoot](https://github.com/${GITHUB_REPOSITORY:-OddBoyXD/YouTube-Music-Morphe}#nonroot) · [Root](https://github.com/${GITHUB_REPOSITORY:-OddBoyXD/YouTube-Music-Morphe}#root)\n"
 if [ -s "$TEMP_DIR/cli.md" ]; then
 	log "$(cat "$TEMP_DIR/cli.md")\n"
 fi

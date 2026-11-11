@@ -6,8 +6,8 @@ Built specifically for **64-bit Android (`arm64-v8a`)** with background playback
 <!--release--><a href="../../releases/latest"><img src="https://img.shields.io/badge/release-v2-blue" alt="Latest release"></a><!--/release--> <!--downloads--><a href="../../releases"><img src="https://img.shields.io/badge/downloads-1-success" alt="Downloads"></a><!--/downloads-->
 
 > [!TIP]
-> **Key Compatibility with MANCrimSon Builds**:  
-> This build is signed with MANCrimSon's exact public keystore. You can install it directly over your existing MANCrimSon YouTube Music installation without uninstalling or losing playlists!
+> **Seamless In-Place Updates**:  
+> This build uses the universal signature certificate. You can install updates directly over your existing YouTube Music app without uninstalling or losing playlists or downloads!
 
 ---
 

@@ -87,11 +87,11 @@ jobs:
           chmod +x ./build.sh
           UPDATE_CFG=$(./build.sh "${{ github.workspace }}/config.toml" --config-update)
 
-          # Check upstream MANCrimSon release tag to trigger if MANCrimSon has a new release
-          mancrimson_rel=$(gh api "repos/MANCrimSon/YouTube-ReVanced-Extended/releases" -q '.[0].tag_name' 2>/dev/null || :)
-          if [ -n "$mancrimson_rel" ]; then
-            if ! grep -qF "MANCrimSon: $mancrimson_rel" state.md 2>/dev/null; then
-              echo "New MANCrimSon release detected: $mancrimson_rel"
+          # Check upstream release tag to trigger if new upstream release is published
+          upstream_rel=$(gh api "repos/MANCrimSon/YouTube-ReVanced-Extended/releases" -q '.[0].tag_name' 2>/dev/null || :)
+          if [ -n "$upstream_rel" ]; then
+            if ! grep -qF "Upstream-Sync: $upstream_rel" state.md 2>/dev/null; then
+              echo "New upstream release detected: $upstream_rel"
               only_apps_val="YouTube-Music-Morphe"
             fi
           fi
@@ -423,11 +423,11 @@ jobs:
       - name: Commit module json changes
         if: ${{ inputs.only_apps || steps.cfg.outputs.should_build != 'false' }}
         run: |
-          mancrimson_rel=$(gh api "repos/MANCrimSon/YouTube-ReVanced-Extended/releases" -q '.[0].tag_name' 2>/dev/null || :)
-          if [ -n "$mancrimson_rel" ]; then
-            grep -v "^MANCrimSon:" state.md > state.md.tmp 2>/dev/null || :
+          upstream_rel=$(gh api "repos/MANCrimSon/YouTube-ReVanced-Extended/releases" -q '.[0].tag_name' 2>/dev/null || :)
+          if [ -n "$upstream_rel" ]; then
+            grep -v "^Upstream-Sync:" state.md > state.md.tmp 2>/dev/null || :
             mv -f state.md.tmp state.md 2>/dev/null || :
-            echo -e "MANCrimSon: ${mancrimson_rel}  " >> state.md
+            echo -e "Upstream-Sync: ${upstream_rel}  " >> state.md
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
