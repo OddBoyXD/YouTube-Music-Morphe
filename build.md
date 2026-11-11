@@ -4,5 +4,5 @@ Install instructions: [NonRoot](https://github.com/OddBoyXD/YouTube-Music-Morphe
   
 CLI: MorpheApp/morphe-desktop/morphe-desktop-2.2.0-dev.12-all.jar  
   
-Patches: MorpheApp/morphe-patches/patches-2.2.0.mpp  
-[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.2.0)  
+Patches: MorpheApp/morphe-patches/patches-2.3.0-dev.1.mpp  
+[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.3.0-dev.1)  
