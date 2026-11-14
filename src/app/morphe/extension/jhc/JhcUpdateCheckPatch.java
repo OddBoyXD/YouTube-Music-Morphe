@@ -49,15 +49,8 @@ import android.content.pm.ShortcutManager;
 import android.os.Bundle;
 import android.preference.Preference;
 import android.preference.PreferenceActivity;
-import android.preference.PreferenceCategory;
 import android.preference.PreferenceFragment;
 import android.preference.PreferenceScreen;
-import android.preference.ListPreference;
-import android.app.AlertDialog;
-import android.widget.EditText;
-import android.media.MediaScannerConnection;
-import android.content.ContentValues;
-import android.provider.MediaStore;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -70,17 +63,6 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.IOException;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
-import android.app.DownloadManager;
-import android.app.PendingIntent;
-import android.content.pm.PackageInstaller;
-import android.database.Cursor;
-import android.os.Environment;
-import android.os.StrictMode;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -178,12 +160,6 @@ public class JhcUpdateCheckPatch {
 
     public static void checkUpdate(Context context) {
         if (context == null) return;
-
-        registerLifecycleIfNeeded(context);
-        cleanupShortcuts(context);
-        cleanupCachedApk(context);
-        initDirectDownloadListener(context);
-
         try {
             String pkg = context.getPackageName().toLowerCase(Locale.ROOT);
             if (pkg.startsWith("com.google.android")) {
@@ -191,6 +167,9 @@ public class JhcUpdateCheckPatch {
                 return;
             }
         } catch (Throwable ignored) {}
+
+        registerLifecycleIfNeeded(context);
+        cleanupShortcuts(context);
 
         boolean isManual = false;
         if (context instanceof Activity) {
@@ -350,11 +329,8 @@ public class JhcUpdateCheckPatch {
             // 4. Attempt if Activity itself is PreferenceActivity
             if (activity instanceof PreferenceActivity) {
                 PreferenceScreen screen = ((PreferenceActivity) activity).getPreferenceScreen();
-                if (screen != null) {
-                    if (isRootMorpheOrRvxScreen(screen, null)) {
-                        tryInjectIntoScreen(screen, activity);
-                    }
-                    tryInjectDownloadSettings(screen, activity);
+                if (screen != null && isRootMorpheOrRvxScreen(screen, null)) {
+                    tryInjectIntoScreen(screen, activity);
                 }
             }
         } catch (Throwable t) {
@@ -406,7 +382,6 @@ public class JhcUpdateCheckPatch {
                 if (isRootMorpheOrRvxScreen(screen, fragment)) {
                     return tryInjectIntoScreen(screen, activity);
                 }
-                return tryInjectDownloadSettings(screen, activity);
             }
         } catch (Throwable t) {
             Log.d(TAG, "tryInjectIntoFragment: " + t.getMessage());
@@ -529,391 +504,6 @@ public class JhcUpdateCheckPatch {
             Log.e(TAG, "Error injecting preference into screen", t);
             return false;
         }
-    }
-
-    // ==================== DIRECT IN-APP DOWNLOADER ====================
-    private static final String PREF_KEY_DL_CAT = "oddverse_dl_category";
-    private static final String PREF_KEY_DL_FORMAT = "oddverse_dl_format";
-    private static final String PREF_KEY_DL_QUALITY = "oddverse_dl_quality";
-    private static final String PREF_KEY_DL_FOLDER = "oddverse_dl_folder";
-
-    private static boolean tryInjectDownloadSettings(PreferenceScreen screen, Activity activity) {
-        if (screen == null || activity == null) return false;
-        try {
-            String key = screen.getKey();
-            if (key == null) return false;
-            String keyLower = key.toLowerCase(Locale.ROOT);
-
-            // Matches "morphe_external_downloader_screen" or any screen matching download
-            if (!keyLower.contains("downloader_screen") && !keyLower.contains("download")) {
-                return false;
-            }
-
-            if (screen.findPreference(PREF_KEY_DL_CAT) != null) {
-                return true;
-            }
-
-            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String defaultFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).getAbsolutePath();
-
-            // Copy layoutResource from existing preference to ensure identical Morphe visual styling
-            int layoutRes = 0;
-            if (screen.getPreferenceCount() > 0) {
-                for (int i = 0; i < screen.getPreferenceCount(); i++) {
-                    Preference p = screen.getPreference(i);
-                    if (p != null && p.getLayoutResource() != 0) {
-                        layoutRes = p.getLayoutResource();
-                        break;
-                    }
-                }
-            }
-
-            // 1. Category Header
-            PreferenceCategory cat = new PreferenceCategory(activity);
-            cat.setKey(PREF_KEY_DL_CAT);
-            cat.setTitle("Direct In-App Downloader");
-            cat.setOrder(100);
-            screen.addPreference(cat);
-
-            // 2. Audio Format Preference
-            Preference formatPref = new Preference(activity);
-            formatPref.setKey(PREF_KEY_DL_FORMAT);
-            formatPref.setTitle("Audio Format");
-            String curFormat = prefs.getString(PREF_KEY_DL_FORMAT, "m4a");
-            formatPref.setSummary(getFormatDisplay(curFormat));
-            formatPref.setOnPreferenceClickListener(p -> {
-                showFormatSelectionDialog(activity, formatPref);
-                return true;
-            });
-            formatPref.setOrder(101);
-            if (layoutRes != 0) formatPref.setLayoutResource(layoutRes);
-            cat.addPreference(formatPref);
-
-            // 3. Audio Quality Preference
-            Preference qualityPref = new Preference(activity);
-            qualityPref.setKey(PREF_KEY_DL_QUALITY);
-            qualityPref.setTitle("Audio Quality");
-            String curQuality = prefs.getString(PREF_KEY_DL_QUALITY, "highest");
-            qualityPref.setSummary(getQualityDisplay(curQuality));
-            qualityPref.setOnPreferenceClickListener(p -> {
-                showQualitySelectionDialog(activity, qualityPref);
-                return true;
-            });
-            qualityPref.setOrder(102);
-            if (layoutRes != 0) qualityPref.setLayoutResource(layoutRes);
-            cat.addPreference(qualityPref);
-
-            // 4. Download Folder Preference
-            Preference folderPref = new Preference(activity);
-            folderPref.setKey(PREF_KEY_DL_FOLDER);
-            folderPref.setTitle("Download Folder");
-            String curFolder = prefs.getString(PREF_KEY_DL_FOLDER, defaultFolder);
-            folderPref.setSummary(curFolder);
-            folderPref.setOnPreferenceClickListener(p -> {
-                showFolderDialog(activity, folderPref, defaultFolder);
-                return true;
-            });
-            folderPref.setOrder(103);
-            if (layoutRes != 0) folderPref.setLayoutResource(layoutRes);
-            cat.addPreference(folderPref);
-
-            Log.i(TAG, "Successfully injected Direct In-App Downloader preferences!");
-            return true;
-        } catch (Throwable t) {
-            Log.e(TAG, "tryInjectDownloadSettings error", t);
-            return false;
-        }
-    }
-
-    private static void showFormatSelectionDialog(Activity activity, Preference formatPref) {
-        try {
-            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String curFormat = prefs.getString(PREF_KEY_DL_FORMAT, "m4a");
-            String[] items = new String[]{"M4A (AAC - Recommended)", "Opus (.opus)", "MP3 (.mp3)"};
-            String[] values = new String[]{"m4a", "opus", "mp3"};
-
-            int selected = 0;
-            for (int i = 0; i < values.length; i++) {
-                if (values[i].equalsIgnoreCase(curFormat)) {
-                    selected = i;
-                    break;
-                }
-            }
-
-            new AlertDialog.Builder(activity)
-                .setTitle("Select Audio Format")
-                .setSingleChoiceItems(items, selected, (dialog, which) -> {
-                    String chosen = values[which];
-                    prefs.edit().putString(PREF_KEY_DL_FORMAT, chosen).apply();
-                    formatPref.setSummary(items[which]);
-                    showToast(activity, "Format set: " + items[which]);
-                    dialog.dismiss();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-        } catch (Throwable t) {
-            Log.e(TAG, "showFormatSelectionDialog error", t);
-        }
-    }
-
-    private static void showQualitySelectionDialog(Activity activity, Preference qualityPref) {
-        try {
-            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String curQuality = prefs.getString(PREF_KEY_DL_QUALITY, "highest");
-            String[] items = new String[]{
-                "Highest (Best Available)",
-                "High (128 kbps)",
-                "Medium (96 kbps)",
-                "Low (64 kbps)"
-            };
-            String[] values = new String[]{"highest", "high", "medium", "low"};
-
-            int selected = 0;
-            for (int i = 0; i < values.length; i++) {
-                if (values[i].equalsIgnoreCase(curQuality)) {
-                    selected = i;
-                    break;
-                }
-            }
-
-            new AlertDialog.Builder(activity)
-                .setTitle("Select Audio Quality")
-                .setSingleChoiceItems(items, selected, (dialog, which) -> {
-                    String chosen = values[which];
-                    prefs.edit().putString(PREF_KEY_DL_QUALITY, chosen).apply();
-                    qualityPref.setSummary(items[which]);
-                    showToast(activity, "Quality set: " + items[which]);
-                    dialog.dismiss();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
-        } catch (Throwable t) {
-            Log.e(TAG, "showQualitySelectionDialog error", t);
-        }
-    }
-
-    private static void showFolderDialog(Activity activity, Preference folderPref, String defaultFolder) {
-        try {
-            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            String currentPath = prefs.getString(PREF_KEY_DL_FOLDER, defaultFolder);
-
-            EditText editText = new EditText(activity);
-            editText.setText(currentPath);
-            editText.setSelection(currentPath.length());
-
-            new AlertDialog.Builder(activity)
-                .setTitle("Download Destination Folder")
-                .setMessage("Enter the folder path where downloaded music will be saved directly:")
-                .setView(editText)
-                .setPositiveButton("Save", (d, w) -> {
-                    String input = editText.getText().toString().trim();
-                    if (input.isEmpty()) input = defaultFolder;
-                    File f = new File(input);
-                    if (!f.exists()) f.mkdirs();
-                    prefs.edit().putString(PREF_KEY_DL_FOLDER, input).apply();
-                    folderPref.setSummary(input);
-                    showToast(activity, "Download folder saved: " + input);
-                })
-                .setNegativeButton("Reset Default", (d, w) -> {
-                    prefs.edit().putString(PREF_KEY_DL_FOLDER, defaultFolder).apply();
-                    folderPref.setSummary(defaultFolder);
-                    showToast(activity, "Reset to: " + defaultFolder);
-                })
-                .setNeutralButton("Cancel", null)
-                .show();
-        } catch (Throwable t) {
-            Log.e(TAG, "showFolderDialog error", t);
-        }
-    }
-
-    private static String getFormatDisplay(String val) {
-        if ("opus".equalsIgnoreCase(val)) return "Opus (.opus)";
-        if ("mp3".equalsIgnoreCase(val)) return "MP3 (.mp3)";
-        return "M4A (AAC - Recommended)";
-    }
-
-    private static String getQualityDisplay(String val) {
-        if ("high".equalsIgnoreCase(val)) return "High (128 kbps)";
-        if ("medium".equalsIgnoreCase(val)) return "Medium (96 kbps)";
-        if ("low".equalsIgnoreCase(val)) return "Low (64 kbps)";
-        return "Highest (Best Available)";
-    }
-
-    private static boolean directDownloadListenerRegistered = false;
-
-    private static void initDirectDownloadListener(Context context) {
-        if (directDownloadListenerRegistered || context == null) return;
-        try {
-            // 1. Ensure Morphe DOWNLOAD_MODE is set to IN_APP so download buttons trigger LocalDownloadManager
-            try {
-                Class<?> settingsClass = Class.forName("app.morphe.extension.music.settings.Settings");
-                Field modeField = settingsClass.getField("DOWNLOAD_MODE");
-                Object modeSetting = modeField.get(null);
-                Method getMethod = modeSetting.getClass().getMethod("get");
-                Object currentMode = getMethod.invoke(modeSetting);
-                if (currentMode != null && currentMode.toString().equals("DEFAULT")) {
-                    Class<?> modeEnum = Class.forName("app.morphe.extension.shared.patches.DownloadMode");
-                    Object inAppEnum = Enum.valueOf((Class<Enum>) modeEnum, "IN_APP");
-                    Method saveMethod = modeSetting.getClass().getMethod("save", Object.class);
-                    saveMethod.invoke(modeSetting, inAppEnum);
-                    Log.i(TAG, "DirectDownloadEngine: auto-configured DOWNLOAD_MODE to IN_APP");
-                }
-            } catch (Throwable ignored) {}
-
-            // 2. Register savedListener with LocalDownloadManager
-            Class<?> ldmClass = Class.forName("app.morphe.extension.music.patches.downloads.LocalDownloadManager");
-            Method addListenerMethod = ldmClass.getDeclaredMethod("addSavedListener", Runnable.class);
-            addListenerMethod.setAccessible(true);
-            addListenerMethod.invoke(null, (Runnable) () -> {
-                processSavedDownloads(context);
-            });
-            directDownloadListenerRegistered = true;
-            Log.i(TAG, "DirectDownloadEngine: savedListener successfully registered!");
-        } catch (Throwable t) {
-            Log.d(TAG, "DirectDownloadEngine init: " + t.getMessage());
-        }
-    }
-
-    private static void processSavedDownloads(Context context) {
-        new Thread(() -> {
-            try {
-                File internalDir = new File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Morphe");
-                if (!internalDir.exists() || !internalDir.isDirectory()) return;
-
-                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-                String defaultFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).getAbsolutePath();
-                String chosenFolder = prefs.getString(PREF_KEY_DL_FOLDER, defaultFolder);
-                String chosenFormat = prefs.getString(PREF_KEY_DL_FORMAT, "m4a").toLowerCase(Locale.ROOT);
-
-                File targetDir = new File(chosenFolder);
-                if (!targetDir.exists()) {
-                    targetDir.mkdirs();
-                }
-
-                File[] files = internalDir.listFiles();
-                if (files == null) return;
-
-                for (File f : files) {
-                    String name = f.getName();
-                    if ((name.endsWith(".m4a") || name.endsWith(".webm") || name.endsWith(".opus")) && !name.endsWith(".part")) {
-                        String videoId = name.substring(0, name.lastIndexOf('.'));
-
-                        // Read metadata from videoId.json
-                        String title = videoId;
-                        String artist = "";
-                        File metaFile = new File(internalDir, videoId + ".json");
-                        if (metaFile.exists()) {
-                            try {
-                                BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(metaFile), "UTF-8"));
-                                StringBuilder sb = new StringBuilder();
-                                String line;
-                                while ((line = reader.readLine()) != null) sb.append(line);
-                                reader.close();
-                                JSONObject json = new JSONObject(sb.toString());
-                                title = json.optString("title", videoId);
-                                artist = json.optString("artist", "");
-                            } catch (Throwable ignored) {}
-                        }
-
-                        // Determine extension based on chosen format
-                        String ext = ".m4a";
-                        if ("opus".equals(chosenFormat)) {
-                            ext = ".opus";
-                        } else if ("mp3".equals(chosenFormat)) {
-                            ext = ".mp3";
-                        }
-
-                        // Sanitize filename
-                        String cleanTitle = sanitizeFilename(title);
-                        String cleanArtist = sanitizeFilename(artist);
-                        String destFileName;
-                        if (!cleanArtist.isEmpty() && !cleanTitle.toLowerCase(Locale.ROOT).contains(cleanArtist.toLowerCase(Locale.ROOT))) {
-                            destFileName = cleanTitle + " (" + cleanArtist + ")" + ext;
-                        } else {
-                            destFileName = cleanTitle + ext;
-                        }
-
-                        File destFile = new File(targetDir, destFileName);
-
-                        // Move or copy to target folder
-                        boolean success = copyOrMoveFile(f, destFile, context, destFileName);
-                        if (success) {
-                            // Delete from internal sandbox cache (zero duplicate storage)
-                            try { f.delete(); } catch (Throwable ignored) {}
-                            if (metaFile.exists()) { try { metaFile.delete(); } catch (Throwable ignored) {} }
-                            File artFile = new File(internalDir, videoId + ".jpg");
-                            if (artFile.exists()) { try { artFile.delete(); } catch (Throwable ignored) {} }
-
-                            // Register with Android MediaStore scanner
-                            try {
-                                MediaScannerConnection.scanFile(context,
-                                    new String[]{destFile.getAbsolutePath()}, null, null);
-                            } catch (Throwable ignored) {}
-
-                            final String toastName = destFileName;
-                            new Handler(Looper.getMainLooper()).post(() -> {
-                                showToast(context, "🎵 Downloaded to Music: " + toastName);
-                            });
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                Log.e(TAG, "processSavedDownloads error", t);
-            }
-        }).start();
-    }
-
-    private static String sanitizeFilename(String input) {
-        if (input == null) return "";
-        return input.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-    }
-
-    private static boolean copyOrMoveFile(File source, File dest, Context context, String displayName) {
-        try {
-            if (dest.getParentFile() != null && !dest.getParentFile().exists()) {
-                dest.getParentFile().mkdirs();
-            }
-            try (FileInputStream in = new FileInputStream(source);
-                 FileOutputStream out = new FileOutputStream(dest)) {
-                byte[] buffer = new byte[65536];
-                int len;
-                while ((len = in.read(buffer)) > 0) {
-                    out.write(buffer, 0, len);
-                }
-                out.flush();
-                return true;
-            }
-        } catch (Throwable t) {
-            Log.d(TAG, "Direct copy failed, trying MediaStore: " + t.getMessage());
-        }
-
-        try {
-            ContentValues values = new ContentValues();
-            values.put(MediaStore.Audio.Media.DISPLAY_NAME, displayName);
-            values.put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC);
-            values.put(MediaStore.Audio.Media.IS_PENDING, 1);
-
-            Uri uri = context.getContentResolver().insert(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values);
-            if (uri != null) {
-                try (InputStream in = new FileInputStream(source);
-                     OutputStream out = context.getContentResolver().openOutputStream(uri)) {
-                    byte[] buffer = new byte[65536];
-                    int len;
-                    while ((len = in.read(buffer)) > 0) {
-                        out.write(buffer, 0, len);
-                    }
-                    out.flush();
-                }
-                values.clear();
-                values.put(MediaStore.Audio.Media.IS_PENDING, 0);
-                context.getContentResolver().update(uri, values, null, null);
-                return true;
-            }
-        } catch (Throwable t2) {
-            Log.e(TAG, "MediaStore copy failed", t2);
-        }
-        return false;
     }
 
     private static void bindIconView(Activity activity, View view) {
@@ -2171,26 +1761,10 @@ public class JhcUpdateCheckPatch {
             LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42, density));
             dlLp.topMargin = dp(10, density);
             downloadBtn.setLayoutParams(dlLp);
-            if (isLatest) {
-                downloadBtn.setText("✅ You're on the latest version");
-                GradientDrawable gd = new GradientDrawable();
-                gd.setColor(dark ? Color.parseColor("#1B261D") : Color.parseColor("#E6F4EA"));
-                gd.setCornerRadius(dp(14, density));
-                downloadBtn.setBackground(gd);
-                downloadBtn.setTextColor(dark ? Color.parseColor("#4BB543") : Color.parseColor("#1E8E3E"));
-                downloadBtn.setOnClickListener(v -> {
-                    showToast(activity, "You are already using the latest version (Build " + tag + ")");
-                });
-            } else {
-                downloadBtn.setOnClickListener(v -> {
-                    if (downloadUrl != null && downloadUrl.endsWith(".apk")) {
-                        startInAppDownload(activity, downloadUrl, tag, downloadBtn, density);
-                    } else {
-                        dialog.dismiss();
-                        openUrl(activity, downloadUrl);
-                    }
-                });
-            }
+            downloadBtn.setOnClickListener(v -> {
+                dialog.dismiss();
+                openUrl(activity, downloadUrl);
+            });
             leftCol.addView(downloadBtn);
 
             // ==================== RIGHT COLUMN CONTENT ====================
@@ -2566,190 +2140,6 @@ public class JhcUpdateCheckPatch {
         } catch (Exception e) {
             Log.e(TAG, "Failed to open url: " + url, e);
         }
-    }
-
-    private static void startInAppDownload(Activity activity, String downloadUrl, String remoteTag, TextView downloadBtn, float density) {
-        try {
-            downloadBtn.setEnabled(false);
-            downloadBtn.setText("Downloading 0%...");
-
-            String fileName = "YouTubeMusic-Morphe-" + (remoteTag != null ? remoteTag : "update") + ".apk";
-            try {
-                File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                if (pubDl != null && pubDl.exists()) {
-                    File oldFile = new File(pubDl, fileName);
-                    if (oldFile.exists()) {
-                        oldFile.delete();
-                    }
-                }
-            } catch (Throwable ignored) {}
-
-            Uri uri = Uri.parse(downloadUrl);
-            DownloadManager.Request request = new DownloadManager.Request(uri);
-            request.setTitle("YouTube Music Morphe Update");
-            request.setDescription("Downloading latest update...");
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setMimeType("application/vnd.android.package-archive");
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-
-            DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm == null) {
-                openUrl(activity, downloadUrl);
-                return;
-            }
-
-            long downloadId = dm.enqueue(request);
-
-            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            prefs.edit().putLong("last_download_id", downloadId).apply();
-
-            Handler handler = new Handler(Looper.getMainLooper());
-            Runnable pollTask = new Runnable() {
-                @Override
-                public void run() {
-                    DownloadManager.Query query = new DownloadManager.Query();
-                    query.setFilterById(downloadId);
-                    Cursor cursor = null;
-                    try {
-                        cursor = dm.query(query);
-                        if (cursor != null && cursor.moveToFirst()) {
-                            int bytesDownloaded = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
-                            int bytesTotal = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
-                            int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
-
-                            if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                                downloadBtn.setEnabled(true);
-                                downloadBtn.setText("🚀 Install Now");
-                                GradientDrawable gd = new GradientDrawable();
-                                gd.setColor(0xFF1B873F);
-                                gd.setCornerRadius(dp(14, density));
-                                downloadBtn.setBackground(gd);
-                                downloadBtn.setOnClickListener(v -> {
-                                    triggerInstall(activity, downloadId, fileName);
-                                });
-                                showToast(activity, "Download complete! Tap 'Install Now' to update.");
-                                return;
-                            } else if (status == DownloadManager.STATUS_FAILED) {
-                                downloadBtn.setEnabled(true);
-                                downloadBtn.setText(getString("download_btn"));
-                                showToast(activity, "Download failed. Opening in browser...");
-                                openUrl(activity, downloadUrl);
-                                return;
-                            } else if (status == DownloadManager.STATUS_RUNNING || status == DownloadManager.STATUS_PENDING) {
-                                if (bytesTotal > 0) {
-                                    int progress = (int) ((bytesDownloaded * 100L) / bytesTotal);
-                                    downloadBtn.setText("Downloading " + progress + "%...");
-                                } else {
-                                    downloadBtn.setText("Downloading...");
-                                }
-                            }
-                        }
-                    } catch (Throwable ignored) {
-                    } finally {
-                        if (cursor != null) {
-                            cursor.close();
-                        }
-                    }
-                    handler.postDelayed(this, 600);
-                }
-            };
-            handler.post(pollTask);
-        } catch (Throwable t) {
-            Log.e(TAG, "In-app download failed to start", t);
-            downloadBtn.setEnabled(true);
-            downloadBtn.setText(getString("download_btn"));
-            openUrl(activity, downloadUrl);
-        }
-    }
-
-    private static void triggerInstall(Activity activity, long downloadId, String fileName) {
-        if (activity == null || activity.isFinishing()) return;
-
-        // Method 1: DownloadManager getUriForDownloadedFile (Standard content URI)
-        try {
-            DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm != null) {
-                Uri uri = dm.getUriForDownloadedFile(downloadId);
-                if (uri != null) {
-                    Intent installIntent = new Intent(Intent.ACTION_VIEW);
-                    installIntent.setDataAndType(uri, "application/vnd.android.package-archive");
-                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    activity.startActivity(installIntent);
-                    return;
-                }
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, "DownloadManager Uri install failed", t);
-        }
-
-        // Method 2: Direct File with StrictMode disabled
-        try {
-            File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            File apkFile = new File(pubDl, fileName);
-            if (apkFile.exists() && apkFile.length() > 0) {
-                try {
-                    Method m = StrictMode.class.getMethod("disableDeathOnFileUriExposure");
-                    m.invoke(null);
-                } catch (Throwable ignored) {}
-
-                Intent installIntent = new Intent(Intent.ACTION_VIEW);
-                installIntent.setDataAndType(Uri.fromFile(apkFile), "application/vnd.android.package-archive");
-                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                activity.startActivity(installIntent);
-                return;
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, "File Uri install failed", t);
-        }
-
-        // Method 3: ACTION_INSTALL_PACKAGE
-        try {
-            DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm != null) {
-                Uri uri = dm.getUriForDownloadedFile(downloadId);
-                if (uri != null) {
-                    Intent installIntent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
-                    installIntent.setData(uri);
-                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    activity.startActivity(installIntent);
-                    return;
-                }
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, "ACTION_INSTALL_PACKAGE failed", t);
-        }
-
-        showToast(activity, "Could not open installer. File is saved in Downloads.");
-    }
-
-    private static void cleanupCachedApk(Context context) {
-        if (context == null) return;
-        try {
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            long lastDlId = prefs.getLong("last_download_id", -1);
-            if (lastDlId != -1) {
-                DownloadManager dm = (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null) {
-                    dm.remove(lastDlId);
-                }
-                prefs.edit().remove("last_download_id").apply();
-            }
-
-            File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            if (pubDl != null && pubDl.exists() && pubDl.isDirectory()) {
-                File[] files = pubDl.listFiles();
-                if (files != null) {
-                    for (File f : files) {
-                        if (f.getName().startsWith("YouTubeMusic-Morphe-") && f.getName().endsWith(".apk")) {
-                            f.delete();
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
     }
 
     private static void showToast(Context context, String msg) {
