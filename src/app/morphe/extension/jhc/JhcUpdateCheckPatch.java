@@ -556,6 +556,18 @@ public class JhcUpdateCheckPatch {
             SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             String defaultFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).getAbsolutePath();
 
+            // Copy layoutResource from existing preference to ensure identical Morphe visual styling
+            int layoutRes = 0;
+            if (screen.getPreferenceCount() > 0) {
+                for (int i = 0; i < screen.getPreferenceCount(); i++) {
+                    Preference p = screen.getPreference(i);
+                    if (p != null && p.getLayoutResource() != 0) {
+                        layoutRes = p.getLayoutResource();
+                        break;
+                    }
+                }
+            }
+
             // 1. Category Header
             PreferenceCategory cat = new PreferenceCategory(activity);
             cat.setKey(PREF_KEY_DL_CAT);
@@ -564,39 +576,31 @@ public class JhcUpdateCheckPatch {
             screen.addPreference(cat);
 
             // 2. Audio Format Preference
-            ListPreference formatPref = new ListPreference(activity);
+            Preference formatPref = new Preference(activity);
             formatPref.setKey(PREF_KEY_DL_FORMAT);
             formatPref.setTitle("Audio Format");
-            formatPref.setEntries(new CharSequence[]{"M4A (AAC - Recommended)", "Opus", "MP3"});
-            formatPref.setEntryValues(new CharSequence[]{"m4a", "opus", "mp3"});
             String curFormat = prefs.getString(PREF_KEY_DL_FORMAT, "m4a");
-            formatPref.setValue(curFormat);
             formatPref.setSummary(getFormatDisplay(curFormat));
-            formatPref.setOnPreferenceChangeListener((preference, newValue) -> {
-                String val = (String) newValue;
-                prefs.edit().putString(PREF_KEY_DL_FORMAT, val).apply();
-                preference.setSummary(getFormatDisplay(val));
+            formatPref.setOnPreferenceClickListener(p -> {
+                showFormatSelectionDialog(activity, formatPref);
                 return true;
             });
             formatPref.setOrder(101);
+            if (layoutRes != 0) formatPref.setLayoutResource(layoutRes);
             cat.addPreference(formatPref);
 
             // 3. Audio Quality Preference
-            ListPreference qualityPref = new ListPreference(activity);
+            Preference qualityPref = new Preference(activity);
             qualityPref.setKey(PREF_KEY_DL_QUALITY);
             qualityPref.setTitle("Audio Quality");
-            qualityPref.setEntries(new CharSequence[]{"Highest (Best Available)", "High (128 kbps)", "Medium (96 kbps)", "Low (64 kbps)"});
-            qualityPref.setEntryValues(new CharSequence[]{"highest", "high", "medium", "low"});
             String curQuality = prefs.getString(PREF_KEY_DL_QUALITY, "highest");
-            qualityPref.setValue(curQuality);
             qualityPref.setSummary(getQualityDisplay(curQuality));
-            qualityPref.setOnPreferenceChangeListener((preference, newValue) -> {
-                String val = (String) newValue;
-                prefs.edit().putString(PREF_KEY_DL_QUALITY, val).apply();
-                preference.setSummary(getQualityDisplay(val));
+            qualityPref.setOnPreferenceClickListener(p -> {
+                showQualitySelectionDialog(activity, qualityPref);
                 return true;
             });
             qualityPref.setOrder(102);
+            if (layoutRes != 0) qualityPref.setLayoutResource(layoutRes);
             cat.addPreference(qualityPref);
 
             // 4. Download Folder Preference
@@ -610,6 +614,7 @@ public class JhcUpdateCheckPatch {
                 return true;
             });
             folderPref.setOrder(103);
+            if (layoutRes != 0) folderPref.setLayoutResource(layoutRes);
             cat.addPreference(folderPref);
 
             Log.i(TAG, "Successfully injected Direct In-App Downloader preferences!");
@@ -617,6 +622,73 @@ public class JhcUpdateCheckPatch {
         } catch (Throwable t) {
             Log.e(TAG, "tryInjectDownloadSettings error", t);
             return false;
+        }
+    }
+
+    private static void showFormatSelectionDialog(Activity activity, Preference formatPref) {
+        try {
+            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String curFormat = prefs.getString(PREF_KEY_DL_FORMAT, "m4a");
+            String[] items = new String[]{"M4A (AAC - Recommended)", "Opus (.opus)", "MP3 (.mp3)"};
+            String[] values = new String[]{"m4a", "opus", "mp3"};
+
+            int selected = 0;
+            for (int i = 0; i < values.length; i++) {
+                if (values[i].equalsIgnoreCase(curFormat)) {
+                    selected = i;
+                    break;
+                }
+            }
+
+            new AlertDialog.Builder(activity)
+                .setTitle("Select Audio Format")
+                .setSingleChoiceItems(items, selected, (dialog, which) -> {
+                    String chosen = values[which];
+                    prefs.edit().putString(PREF_KEY_DL_FORMAT, chosen).apply();
+                    formatPref.setSummary(items[which]);
+                    showToast(activity, "Format set: " + items[which]);
+                    dialog.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+        } catch (Throwable t) {
+            Log.e(TAG, "showFormatSelectionDialog error", t);
+        }
+    }
+
+    private static void showQualitySelectionDialog(Activity activity, Preference qualityPref) {
+        try {
+            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String curQuality = prefs.getString(PREF_KEY_DL_QUALITY, "highest");
+            String[] items = new String[]{
+                "Highest (Best Available)",
+                "High (128 kbps)",
+                "Medium (96 kbps)",
+                "Low (64 kbps)"
+            };
+            String[] values = new String[]{"highest", "high", "medium", "low"};
+
+            int selected = 0;
+            for (int i = 0; i < values.length; i++) {
+                if (values[i].equalsIgnoreCase(curQuality)) {
+                    selected = i;
+                    break;
+                }
+            }
+
+            new AlertDialog.Builder(activity)
+                .setTitle("Select Audio Quality")
+                .setSingleChoiceItems(items, selected, (dialog, which) -> {
+                    String chosen = values[which];
+                    prefs.edit().putString(PREF_KEY_DL_QUALITY, chosen).apply();
+                    qualityPref.setSummary(items[which]);
+                    showToast(activity, "Quality set: " + items[which]);
+                    dialog.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+        } catch (Throwable t) {
+            Log.e(TAG, "showQualitySelectionDialog error", t);
         }
     }
 
