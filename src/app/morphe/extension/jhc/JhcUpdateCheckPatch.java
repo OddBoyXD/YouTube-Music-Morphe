@@ -2593,55 +2593,7 @@ public class JhcUpdateCheckPatch {
     private static void triggerInstall(Activity activity, long downloadId, String fileName) {
         if (activity == null || activity.isFinishing()) return;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!activity.getPackageManager().canRequestPackageInstalls()) {
-                Intent settingsIntent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
-                settingsIntent.setData(Uri.parse("package:" + activity.getPackageName()));
-                settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                activity.startActivity(settingsIntent);
-                showToast(activity, "Please allow permission to install updates, then tap Install Now");
-                return;
-            }
-        }
-
-        File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        File apkFile = new File(pubDl, fileName);
-
-        // Method 1: Android PackageInstaller session (Native prompt directly on screen, no external apps)
-        if (apkFile.exists() && apkFile.length() > 0) {
-            try {
-                PackageInstaller packageInstaller = activity.getPackageManager().getPackageInstaller();
-                PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
-                    PackageInstaller.SessionParams.MODE_FULL_INSTALL
-                );
-                int sessionId = packageInstaller.createSession(params);
-                PackageInstaller.Session session = packageInstaller.openSession(sessionId);
-
-                try (FileInputStream in = new FileInputStream(apkFile);
-                     OutputStream out = session.openWrite("package", 0, apkFile.length())) {
-                    byte[] buffer = new byte[65536];
-                    int len;
-                    while ((len = in.read(buffer)) > 0) {
-                        out.write(buffer, 0, len);
-                    }
-                    session.fsync(out);
-                }
-
-                Intent callbackIntent = new Intent(activity, activity.getClass());
-                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                if (Build.VERSION.SDK_INT >= 31) {
-                    flags |= PendingIntent.FLAG_MUTABLE;
-                }
-                PendingIntent pendingIntent = PendingIntent.getActivity(activity, sessionId, callbackIntent, flags);
-                session.commit(pendingIntent.getIntentSender());
-                session.close();
-                return;
-            } catch (Throwable t) {
-                Log.e(TAG, "PackageInstaller session failed", t);
-            }
-        }
-
-        // Method 2: DownloadManager getUriForDownloadedFile
+        // Method 1: DownloadManager getUriForDownloadedFile (Standard content URI)
         try {
             DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm != null) {
@@ -2659,23 +2611,43 @@ public class JhcUpdateCheckPatch {
             Log.e(TAG, "DownloadManager Uri install failed", t);
         }
 
-        // Method 3: StrictMode lax File Uri
-        if (apkFile.exists()) {
-            try {
-                Method m = StrictMode.class.getMethod("disableDeathOnFileUriExposure");
-                m.invoke(null);
-            } catch (Throwable ignored) {}
+        // Method 2: Direct File with StrictMode disabled
+        try {
+            File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File apkFile = new File(pubDl, fileName);
+            if (apkFile.exists() && apkFile.length() > 0) {
+                try {
+                    Method m = StrictMode.class.getMethod("disableDeathOnFileUriExposure");
+                    m.invoke(null);
+                } catch (Throwable ignored) {}
 
-            try {
                 Intent installIntent = new Intent(Intent.ACTION_VIEW);
                 installIntent.setDataAndType(Uri.fromFile(apkFile), "application/vnd.android.package-archive");
                 installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 activity.startActivity(installIntent);
                 return;
-            } catch (Throwable t) {
-                Log.e(TAG, "File Uri install failed", t);
             }
+        } catch (Throwable t) {
+            Log.e(TAG, "File Uri install failed", t);
+        }
+
+        // Method 3: ACTION_INSTALL_PACKAGE
+        try {
+            DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) {
+                Uri uri = dm.getUriForDownloadedFile(downloadId);
+                if (uri != null) {
+                    Intent installIntent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
+                    installIntent.setData(uri);
+                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    activity.startActivity(installIntent);
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "ACTION_INSTALL_PACKAGE failed", t);
         }
 
         showToast(activity, "Could not open installer. File is saved in Downloads.");
