@@ -63,6 +63,10 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.IOException;
+import java.io.File;
+import android.app.DownloadManager;
+import android.database.Cursor;
+import android.os.Environment;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -170,6 +174,7 @@ public class JhcUpdateCheckPatch {
 
         registerLifecycleIfNeeded(context);
         cleanupShortcuts(context);
+        cleanupCachedApk(context);
 
         boolean isManual = false;
         if (context instanceof Activity) {
@@ -1762,8 +1767,12 @@ public class JhcUpdateCheckPatch {
             dlLp.topMargin = dp(10, density);
             downloadBtn.setLayoutParams(dlLp);
             downloadBtn.setOnClickListener(v -> {
-                dialog.dismiss();
-                openUrl(activity, downloadUrl);
+                if (downloadUrl != null && downloadUrl.endsWith(".apk")) {
+                    startInAppDownload(activity, downloadUrl, tag, downloadBtn, density);
+                } else {
+                    dialog.dismiss();
+                    openUrl(activity, downloadUrl);
+                }
             });
             leftCol.addView(downloadBtn);
 
@@ -2140,6 +2149,163 @@ public class JhcUpdateCheckPatch {
         } catch (Exception e) {
             Log.e(TAG, "Failed to open url: " + url, e);
         }
+    }
+
+    private static void startInAppDownload(Activity activity, String downloadUrl, String remoteTag, TextView downloadBtn, float density) {
+        try {
+            downloadBtn.setEnabled(false);
+            downloadBtn.setText("Downloading 0%...");
+
+            String fileName = "YouTubeMusic-Morphe-" + (remoteTag != null ? remoteTag : "update") + ".apk";
+            try {
+                File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                if (pubDl != null && pubDl.exists()) {
+                    File oldFile = new File(pubDl, fileName);
+                    if (oldFile.exists()) {
+                        oldFile.delete();
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            Uri uri = Uri.parse(downloadUrl);
+            DownloadManager.Request request = new DownloadManager.Request(uri);
+            request.setTitle("YouTube Music Morphe Update");
+            request.setDescription("Downloading latest update...");
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setMimeType("application/vnd.android.package-archive");
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+
+            DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) {
+                openUrl(activity, downloadUrl);
+                return;
+            }
+
+            long downloadId = dm.enqueue(request);
+
+            SharedPreferences prefs = activity.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            prefs.edit().putLong("last_download_id", downloadId).apply();
+
+            Handler handler = new Handler(Looper.getMainLooper());
+            Runnable pollTask = new Runnable() {
+                @Override
+                public void run() {
+                    DownloadManager.Query query = new DownloadManager.Query();
+                    query.setFilterById(downloadId);
+                    Cursor cursor = null;
+                    try {
+                        cursor = dm.query(query);
+                        if (cursor != null && cursor.moveToFirst()) {
+                            int bytesDownloaded = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                            int bytesTotal = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                            int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+
+                            if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                                downloadBtn.setEnabled(true);
+                                downloadBtn.setText("🚀 Install Update");
+                                GradientDrawable gd = new GradientDrawable();
+                                gd.setColor(0xFF1B873F);
+                                gd.setCornerRadius(dp(14, density));
+                                downloadBtn.setBackground(gd);
+                                downloadBtn.setOnClickListener(v -> {
+                                    triggerInstall(activity, downloadId);
+                                });
+                                triggerInstall(activity, downloadId);
+                                return;
+                            } else if (status == DownloadManager.STATUS_FAILED) {
+                                downloadBtn.setEnabled(true);
+                                downloadBtn.setText(getString("download_btn"));
+                                showToast(activity, "Download failed. Opening in browser...");
+                                openUrl(activity, downloadUrl);
+                                return;
+                            } else if (status == DownloadManager.STATUS_RUNNING || status == DownloadManager.STATUS_PENDING) {
+                                if (bytesTotal > 0) {
+                                    int progress = (int) ((bytesDownloaded * 100L) / bytesTotal);
+                                    downloadBtn.setText("Downloading " + progress + "%...");
+                                } else {
+                                    downloadBtn.setText("Downloading...");
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    } finally {
+                        if (cursor != null) {
+                            cursor.close();
+                        }
+                    }
+                    handler.postDelayed(this, 600);
+                }
+            };
+            handler.post(pollTask);
+        } catch (Throwable t) {
+            Log.e(TAG, "In-app download failed to start", t);
+            downloadBtn.setEnabled(true);
+            downloadBtn.setText(getString("download_btn"));
+            openUrl(activity, downloadUrl);
+        }
+    }
+
+    private static void triggerInstall(Context context, long downloadId) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!context.getPackageManager().canRequestPackageInstalls()) {
+                    Intent settingsIntent = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                    settingsIntent.setData(Uri.parse("package:" + context.getPackageName()));
+                    settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(settingsIntent);
+                    showToast(context, "Please allow permission to install updates");
+                    return;
+                }
+            }
+
+            DownloadManager dm = (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) {
+                Uri uri = dm.getUriForDownloadedFile(downloadId);
+                if (uri != null) {
+                    Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                    installIntent.setDataAndType(uri, "application/vnd.android.package-archive");
+                    installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    context.startActivity(installIntent);
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to launch package installer", t);
+        }
+
+        try {
+            Intent viewDownloads = new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS);
+            viewDownloads.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(viewDownloads);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void cleanupCachedApk(Context context) {
+        if (context == null) return;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            long lastDlId = prefs.getLong("last_download_id", -1);
+            if (lastDlId != -1) {
+                DownloadManager dm = (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null) {
+                    dm.remove(lastDlId);
+                }
+                prefs.edit().remove("last_download_id").apply();
+            }
+
+            File pubDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (pubDl != null && pubDl.exists() && pubDl.isDirectory()) {
+                File[] files = pubDl.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith("YouTubeMusic-Morphe-") && f.getName().endsWith(".apk")) {
+                            f.delete();
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     private static void showToast(Context context, String msg) {
