@@ -2,7 +2,7 @@ YouTube-Music-Morphe: 9.30.53
 
 Install instructions: [NonRoot](https://github.com/OddBoyXD/YouTube-Music-Morphe#nonroot) · [Root](https://github.com/OddBoyXD/YouTube-Music-Morphe#root)
   
-CLI: MorpheApp/morphe-desktop/morphe-desktop-2.4.0-all.jar  
+CLI: MorpheApp/morphe-desktop/morphe-desktop-2.5.0-dev.1-all.jar  
   
-Patches: MorpheApp/morphe-patches/patches-2.5.0-dev.2.mpp  
-[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.5.0-dev.2)  
+Patches: MorpheApp/morphe-patches/patches-2.5.0-dev.3.mpp  
+[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.5.0-dev.3)  
